@@ -1,0 +1,44 @@
+                          Concept
+I haven't pushed the idea to an extreme yet but
+I've done tests and found it is possible to do
+Stop Motion type animation in Blender.
+
+Initially I tried with objects, which worked but then
+I wondered what would happen if collections instead.
+The result is much better but the tedium sparked the idea to
+automate certain tasks to speed up the process.
+
+
+                        Method/Usage
+You create objects to form a single image frame (like stop motion).
+You go to another frame and create another image, and so on.
+You can't animate object/collection visibility in 2.8.
+Initially I tried animating the Object Display type however if you instance
+its collection, you could animate the collection's instance_type.
+This works better because:
+    1) Draw type is always visible in viewport unless overlays are disabled.
+    2) Lets you worry about fewer items' keyframes.
+
+
+                       Keymap Implementation
+When cycling through frames, the mesh collection is disabled.
+If you click the visible instance and run the Edit_Mode operator,
+the designated collection will be shown and the instance hidden.
+Another operator will allow you to toggle back to the instance.
+
+A function will be placed in bpy.app.handlers.frame_change_pre.
+This function re-hide collections and display instances.
+
+An operator will handle keyframe management.
+When ran, it will either:
+    1) Create an empty keyframe collection.
+    2) Duplicate the current collection (there's an op that does this).
+Next it will push the keyframe of every other frame.
+Thus, making frame changes a single button click, rather than several steps.
+
+There also needs to be a differentiate between background and objects.
+Meaning in Stop Motion, EVERY single thing in the scene is animated together.
+There are no do-overs or coming back to a particular thing later.
+You get it all done in one frame, then move to the next.
+There's no reason to force this limitation in CG.
+So, the idea is to perform these visibility tasks on multiple collections.

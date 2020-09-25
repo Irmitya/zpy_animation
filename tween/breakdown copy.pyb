@@ -1,0 +1,803 @@
+import bpy
+from bpy.types import Operator
+from bpy.props import EnumProperty
+from zpy import register_keymaps, Get, Is, utils, keyframe
+km = register_keymaps()
+
+
+transforms = ('location', 'rotation_euler', 'rotation_quaternion', 'rotation_axis_angle', 'scale')
+
+
+class tween:
+    bl_options = {'UNDO', 'BLOCKING', 'GRAB_CURSOR'}
+    keytype = 'BREAKDOWN'
+    mode = 'Sliding-Tool'
+
+    @classmethod
+    def description(cls, context, properties):
+        return cls.bl_rna.description
+
+    @classmethod
+    def poll(cls, context):
+        return context.mode in ('POSE', 'OBJECT')
+
+    def invoke(self, context, event):
+        area = context.area
+        center = area.width / 2 + area.x
+        self.offset = (event.mouse_x - center) / area.width
+        self.center_x = int(area.width / 2)
+        self.center_y = int(area.height / 2)
+        self.mouse_x = event.mouse_x
+
+        self.fcurves = get_keys(context)
+        # if self.fcurves is None:
+        #     return {'PASS_THROUGH'}
+        # elif self.fcurves is False:
+        if not self.fcurves:
+            return {'CANCELLED'}
+        else:
+            self.get_offset(context, event)
+
+        context.window.cursor_set("SCROLL_X")
+        context.window_manager.modal_handler_add(self)
+
+        return {'RUNNING_MODAL'}
+
+    def modal(self, context, event):
+        area = context.area
+
+        if event.type in {'LEFTMOUSE', 'RET', 'NUMPAD_ENTER'}:
+            area.header_text_set(None)
+            context.window.cursor_set("DEFAULT")
+            if keyframe.use_auto(context):
+                # keyframe.keyingset(context)
+                for arg in self.fcurves:
+                    (left, current, right) = self.fcurves[arg]
+                    fc_key = keyframe.manual(context, current.src, current.attr, index=current.index)
+
+                    # Set the new keyframe's type to Breakdown or Extreme
+                    if (not current.found) and current.in_range:
+                        fc_key[1].type = self.keytype
+            return {'FINISHED'}
+        elif event.type in {'RIGHTMOUSE', 'ESC'}:
+            area.header_text_set(None)
+            context.window.cursor_set("DEFAULT")
+            for arg in self.fcurves:
+                (left, current, right) = self.fcurves[arg]
+                current.prop[current.index] = current.value
+            return {'CANCELLED'}
+        elif event.type == 'MOUSEMOVE':
+            self.get_offset(context, event)
+        elif event.value == 'PRESS':
+            # if ((event->val == KM_PRESS) && handleNumInput(C, &pso->num, event)) {
+            if self.num:
+                # Grab percentage from numeric input, and store this new value for redo
+                # NOTE: users see ints, while internally we use a 0-1 float
+                value = self.percentage * 100.0
+                # applyNumInput(&pso->num, &value);
+
+                self.percentage = value / 100.0
+                # CLAMP(pso->percentage, 0.0f, 1.0f);
+                # RNA_float_set(op->ptr, "percentage", pso->percentage);
+
+                # /* Update pose to reflect the new values (see below) */
+                do_pose_update = true
+
+            # Transform Channel Limits
+            elif event.type == 'G':  # Location
+                self.toggle_channels('LOC')
+                self.get_offset(context, event)
+            elif event.type == 'R':  # Rotation
+                self.toggle_channels('ROT')
+                self.get_offset(context, event)
+            elif event.type == 'S':  # Scale
+                self.toggle_channels('SIZE')
+                self.get_offset(context, event)
+            elif event.type == 'B':  # Bendy Bones
+                self.toggle_channels('BBONE')
+                self.get_offset(context, event)
+            elif event.type == 'C':  # Custom Properties
+                self.toggle_channels('CUSTOM')
+                self.get_offset(context, event)
+
+            # Axis Locks
+            elif event.type == 'X':
+                if self.toggle_axis_locks('X'):
+                    self.get_offset(context, event)
+            elif event.type == 'Y':
+                if self.toggle_axis_locks('Y'):
+                    self.get_offset(context, event)
+            elif event.type == 'Z':
+                if self.toggle_axis_locks('Z'):
+                    self.get_offset(context, event)
+
+            else:
+                # unhandled event - maybe it was some view manip?
+                # allow to pass through
+                return {'PASS_THROUGH'}
+
+        return {'RUNNING_MODAL'}
+
+    def toggle_channels(self, channel):
+        """handle an event to toggle channels mode"""
+
+        # Turn channel on or off?
+        if self.channels == channel:
+            # Already limiting to transform only, so pressing this again turns it off
+            self.channels = 'ALL'
+        else:
+            # Only this set of channels
+            self.channels = channel
+
+        # Reset axis limits too for good measure
+        self.axislock = 'FREE'
+
+    def toggle_axis_locks(self, axis):
+        """handle an event to toggle axis locks - returns whether any change in state is needed"""
+
+        # Axis can only be set when a transform is set - it doesn't make sense otherwise
+        if self.channels in ('ALL', 'BBONE', 'CUSTOM'):
+            return False
+
+        # Turn on or off?
+        if self.axislock == axis:
+            # Already limiting on this axis, so turn off
+            self.axislock = 'FREE'
+        else:
+            # Only this axis
+            self.axislock = axis
+
+        # Setting changed, so pose update is needed
+        return True
+
+    def get_offset(self, context, event):
+        area = context.area
+        center = area.width / 2 + area.x
+        self.offset = (event.mouse_x - center) / area.width
+        # # offset = utils.scale_range(self.offset, -0.5, 0.5, 0, 1)
+
+        # offset = self.offset
+        # offset = (event.mouse_x - self.mouse_x) / area.width
+        # # offset = utils.scale_range(self.mouse_x - event.mouse_x, event.mouse_x, )
+
+        offset = utils.scale_range(self.offset, -0.5, 0.5, 0, 1)
+
+        self.percentage = offset
+        self.set_text(area)
+
+        for arg in self.fcurves:
+            if (self.channels != 'ALL') or (self.axislock != 'FREE'):
+                current = self.fcurves[arg][1]
+                attr = current.attr
+                index = current.index
+                reset = False
+
+                if (self.channels == 'LOC'):
+                    if (current.attr != 'location'):
+                        reset = True
+                    elif (self.axislock == 'FREE'):
+                        pass
+                    elif (['X', 'Y', 'Z'][index] != self.axislock):
+                        reset = True
+                elif (self.channels == 'ROT'):
+                    if (attr == 'rotation_euler'):
+                        if (self.axislock == 'FREE'):
+                            pass
+                        elif (['X', 'Y', 'Z'][index] != self.axislock):
+                            reset = True
+                    elif (attr == 'rotation_quaternion'):
+                        if (self.axislock == 'FREE') or (index == 0):
+                            pass
+                        elif (['X', 'Y', 'Z'][index - 1] != self.axislock):
+                            reset = True
+                    elif attr == 'rotation_axis_angle':
+                        if (self.axislock == 'FREE'):
+                            pass
+                        else:
+                            reset = True
+                    else:
+                        reset = True
+                elif (self.channels == 'SIZE'):
+                    if (attr != 'scale'):
+                        reset = True
+                    elif (self.axislock == 'FREE'):
+                        pass
+                    elif (['X', 'Y', 'Z'][index] != self.axislock):
+                        reset = True
+                elif (self.channels == 'BBONE'):
+                    if not attr.startswith('bbone'):
+                        continue
+                elif (self.channels == 'CUSTOM'):
+                    if ('["' not in attr) or ('"]' not in attr):
+                        continue
+
+                if reset:
+                    current.prop[current.index] = current.value
+                    continue
+
+            self.tween(*self.fcurves[arg])
+
+    def set_text(self, area):
+        # TODO: setup axis limits like the regular tweener, currently nothing set
+            # area.header_text_set("%s: %.f %%  |  %s"%(mode, offset*100, limit))
+
+        mode_str = self.mode
+
+        if self.axislock == 'X':
+            axis_str = "[X]/Y/Z axis only (X to clear)"
+        elif self.axislock == 'Y':
+            axis_str = "X/[Y]/Z axis only (Y to clear)"
+        elif self.axislock == 'Z':
+            axis_str = "X/Y/[Z] axis only (Z to clear)"
+        else:
+            axis_str = "X/Y/Z = Axis Constraint"
+
+        if self.channels == 'LOC':
+            limits_str = "[G]/R/S/B/C - Location only (G to clear) | " + axis_str
+        elif self.channels == 'ROT':
+            limits_str = "G/[R]/S/B/C - Rotation only (R to clear) | " + axis_str
+        elif self.channels == 'SIZE':
+            limits_str = "G/R/[S]/B/C - Scale only (S to clear) | " + axis_str
+        elif self.channels == 'BBONE':
+            limits_str = "G/R/S/[B]/C - Bendy Bone properties only (B to clear)"
+        elif self.channels == 'CUSTOM':
+            limits_str = "G/R/S/B/[C] - Custom Properties only (C to clear)"
+        else:
+            limits_str = "G/R/S/B/C - Limit to Transform/Property Set"
+
+        if self.num:
+            str_offs = "numinput = [num]"
+
+            status_str = "%s: %s     |   %s" % (
+                mode_str, str_offs, limits_str)
+        else:
+            status_str = "%s: %d %%     |   %s" % (
+                mode_str, int(self.percentage * 100.0), limits_str)
+            # status_str = f"{mode_str}: {int(self.percentage) * 100} %     |   {limits_str}"
+
+        area.header_text_set(status_str)
+
+    channels: EnumProperty(
+        items=[
+            ('ALL', "All Properties", "All properties, including transforms, bendy bone shape, and custom properties"),
+            ('LOC', "Location", "Location only"),
+            ('ROT', "Rotation", "Rotation only"),
+            ('SIZE', "Scale", "Scale only"),
+            ('BBONE', "Bendy Bone", "Bendy Bone shape properties"),
+            ('CUSTOM', "Custom Properties", "Custom properties"),
+        ],
+        name="Channels",
+        description="Set of properties that are affected",
+        default='ALL',
+        options={'ANIMATABLE'},
+        #   (set) – Enumerator  in ['HIDDEN', 'SKIP_SAVE', 'ANIMATABLE',
+        #   'ENUM_FLAG', 'LIBRARY_EDITABLE'].
+    )
+    axislock: EnumProperty(
+        items=[
+            ('FREE', "Free", "All axes are affected"),
+            ('X', "X", "Only X-axis transforms are affected"),
+            ('Y', "Y", "Only Y-axis transforms are affected"),
+            ('Z', "Z", "Only Z-axis transforms are affected"),
+        ],
+        name="Axis Lock",
+        description="Transform axis to restrict effects to",
+        default='FREE',
+        options={'ANIMATABLE'},
+        #   (set) – Enumerator  in ['HIDDEN', 'SKIP_SAVE', 'ANIMATABLE',
+        #   'ENUM_FLAG', 'LIBRARY_EDITABLE'].
+    )
+
+    num: bpy.props.StringProperty()
+
+
+class TWEEN_OT_breakdown(Operator, tween):
+    bl_description = "Create a suitable breakdown pose on the current frame"
+    bl_idname = 'zpy.tween_breakdown'
+    bl_label = "Pose Breakdowner"
+    mode = 'Breakdown'
+
+    def tween(self, left, current, right):
+        sVal = left.value
+        eVal = right.value
+
+        if current.attr == 'rotation_quaternion' and current.quat:
+            quat_final = [0, 0, 0, 0]
+            quat_prev = left.quat.copy()
+            quat_next = right.quat.copy()
+
+            # Just perform the interpolation between quat_prev and
+            # quat_next using pso->percentage as a guide.
+            maths.interp_qt_qtqt(quat_final, quat_prev, quat_next, self.percentage)
+
+            val = quat_final[current.index]
+        else:
+            w1 = self.percentage
+            w2 = 1 - w1
+
+            val = ((sVal * w2) + (eVal * w1))
+
+        current.apply(val)
+        # current.prop[current.index] = val
+
+
+class TWEEN_OT_relax(Operator, tween):
+    bl_description = "Make the current pose more similar to its breakdown pose"
+    bl_idname = 'zpy.tween_relax'
+    bl_label = "Relax Pose to Breakdown"
+    mode = 'Relax Pose'
+
+    def tween(self, left, current, right):
+        val = current.value
+        sVal = left.value
+        eVal = right.value
+
+        # # This is the internal operator's "relax" tween for rotations
+        # # Problem is, it (like the internal one) doesn't do a smooth blend
+        if current.attr == 'rotation_quaternion' and current.quat:
+            quat_final = [0, 0, 0, 0]
+
+            quat_prev = left.quat.copy()
+            quat_curr = current.quat.copy()
+            quat_next = right.quat.copy()
+            quat_interp = [0, 0, 0, 0]
+            quat_final_prev = [0, 0, 0, 0]
+
+            maths.copy_qt_qt(quat_final, quat_curr)
+
+            cframe = bpy.context.scene.frame_current_final
+            if left.frame < right.frame:
+                frame = (cframe - left.frame) / (right.frame - left.frame)
+            else:
+                frame = 0
+
+            from math import ceil
+            # /* TODO: maybe a sensitivity ctrl on top of this is needed */
+            iters = int(ceil(10.0 * self.percentage))
+
+            # /* perform this blending several times until a satisfactory result is reached */
+            for iter in range(iters):
+                # /* calculate the interpolation between the endpoints */
+                maths.interp_qt_qtqt(quat_interp, quat_prev, quat_next, frame)
+
+                maths.normalize_qt_qt(quat_final_prev, quat_final)
+
+                # /* tricky interpolations - blending between original and new */
+                maths.interp_qt_qtqt(quat_final, quat_final_prev, quat_interp, 1.0 / 6.0)
+
+                iters -= 1
+            val = quat_final[current.index]
+        else:
+            w1 = current.w1
+            w2 = current.w2
+
+            wtot = w1 + w2
+            if wtot:
+                w1 = (w1 / wtot)
+                w2 = (w2 / wtot)
+            else:
+                w1 = w2 = 0.5
+
+            val += ((sVal * w2) + (eVal * w1) - (val)) * self.percentage
+
+        current.apply(val)
+        # current.prop[current.index] = val
+
+
+class TWEEN_OT_push(Operator, tween):
+    bl_description = "Exaggerate the current pose in regards to the breakdown pose"
+    bl_idname = 'zpy.tween_push'
+    bl_label = "Push Pose from Breakdown"
+    mode = 'Push Pose'
+    keytype = 'EXTREME'
+
+    def tween(self, left, current, right):
+        val = current.value
+        sVal = left.value
+        eVal = right.value
+
+        if current.attr == 'rotation_quaternion' and current.quat:
+            quat_final = current.quat.copy()
+            quat_final[current.index] = val
+
+            quat_diff = [0, 0, 0, 0]
+            quat_curr = current.quat.copy()
+            quat_prev = left.quat.copy()
+
+            # calculate the delta transform from the previous to the current
+            maths.sub_qt_qtqt(quat_diff, quat_curr, quat_prev)
+
+            # increase the original by the delta transform, by an amount determined by percentage
+            maths.add_qt_qtqt(quat_final, quat_curr, quat_diff, self.percentage)
+
+            maths.normalize_qt(quat_final)
+
+            val = quat_final[current.index]
+        else:
+            w1 = current.w1
+            w2 = current.w2
+
+            wtot = w1 + w2
+            if wtot:
+                w1 = (w1 / wtot)
+                w2 = (w2 / wtot)
+            else:
+                w1 = w2 = 0.5
+
+            val -= ((sVal * w2) + (eVal * w1) - (val)) * self.percentage
+
+        current.apply(val)
+        # current.prop[current.index] = val
+
+
+def get_keys(context):
+    scn_frame = context.scene.frame_current_final
+    fcurves = dict()
+    quats = dict()
+
+    "This would poll to only run on rigs, when using additive layer"
+    # if context.mode == 'POSE':
+        # rigs = list()
+        # for src in Get.selected(context):
+            # anim = src.id_data.animation_data
+            # action = getattr(anim, 'action', None)
+            # if not action or (src.id_data in rigs):
+                # continue
+            # rigs.append(src.id_data)
+
+            # if anim.use_tweak_mode:
+                # for s in Get.strips(anim.id_data):
+                    # if s.action == anim.action:
+                        # strip = s
+                        # if s.active: break
+                # if strip.blend_type != 'REPLACE':
+                    # break
+                # frame = Get.frame_to_strip(context, anim, scn_frame)
+            # else:
+                # if anim.action_blend_type != 'REPLACE':
+                    # break
+        # else:
+            # # Return nothing and run the regular tween
+            # # because nothing is using additive layer and default is faster
+            # return
+
+
+    if context.mode == 'POSE':
+        selected = list()
+
+        for ob in Get.objects(context):
+            if ob.mode != 'POSE':
+                continue
+            selected.extend(Get.selected_pose_bones(context, ob))
+
+        if not selected:
+            for ob in Get.objects(context):
+                if ob.mode != 'POSE':
+                    continue
+                for bone in ob.pose.bones:
+                    if Is.visible(context, bone):
+                        selected.append(bone)
+    else:
+        selected = Get.selected_objects(context)
+
+    for src in selected:
+        anim = src.id_data.animation_data
+        action = getattr(anim, 'action', None)
+        if not action:
+            continue
+
+        if anim.use_tweak_mode:
+            frame = Get.frame_to_strip(context, anim, scn_frame)
+            for s in Get.strips(anim.id_data):
+                if s.action == anim.action:
+                    strip = s
+                    if s.active: break
+            blend = strip.blend_type
+        else:
+            frame = scn_frame
+            blend = anim.action_blend_type
+
+        offset = abs(frame - scn_frame)
+        if (scn_frame < frame):
+            offset *= -1
+
+        for attr in transforms:
+            path = src.path_from_id(attr)
+            prop = src.path_resolve(attr)
+
+            # any_quat = None  # for combine layers (add keys on all 4)
+
+            for index in range(len(prop)):
+                fc = action.fcurves.find(path, index=index)
+                if fc is None or len(fc.keyframe_points) < 2:
+                    continue
+
+                cache = dict(
+                    attr=attr,
+                    index=index,
+                    is_array=True,
+                    key=None,
+                    quat=None,
+                    prop=prop,
+                    src=src,
+                    value=fc.evaluate(frame),
+                )
+                left = type('', (), cache)
+                current = type('', (), cache)
+                current.found = False
+                right = type('', (), cache)
+
+                pre_key = None
+
+                for key in fc.keyframe_points:
+                    if key.co[0] < frame:
+                        left.key = key
+                        left.value = key.co[1]
+                        right.key = key
+                        right.value = key.co[1]
+                    elif key.co[0] == frame:
+                        if left.key is None:
+                            left.key = key
+                            left.value = key.co[1]
+                        current.key = key
+                        current.found = True
+                        right.key = key
+                        right.value = key.co[1]
+                    elif key.co[0] > frame:
+                        if left.key is None:
+                            left.key = key
+                            left.value = key.co[1]
+                        right.key = key
+                        right.value = key.co[1]
+                        break
+
+                # (fstart, fend) = fc.range()
+                # if frame <= fstart:
+                    # left.key = fc.keyframe_points[0]
+                    # left.value = left.key.co[1]
+                    # right.key = fc.keyframe_points[1]
+                    # right.value = right.key.co[1]
+                # elif fend <= frame:
+                    # left.key = fc.keyframe_points[-2]
+                    # left.value = left.key.co[1]
+                    # right.key = fc.keyframe_points[-1]
+                    # right.value = right.key.co[1]
+
+                # if attr == 'rotation_quaternion' and any_quat is None:
+                    # any_quat = current.found
+
+                if not (left.key and right.key):
+                    continue
+
+                def apply(val):
+                    if attr in transforms:
+                        current.prop[current.index] = val
+                    else:
+                        setattr(current.prop, attr, val)
+                current.apply = apply
+
+                if attr == 'rotation_quaternion':
+                    # Do math for quaternions
+                    if (action, path) not in quats:
+                        quats[(action, path)] = dict()
+
+                    if (src.lock_rotations_4d or not src.lock_rotation_w) \
+                        and True not in src.lock_rotation[:]:
+                        quats[(action, path)][index] = (left, current, right)
+
+                # Get info for current keyframe's defaults
+
+                sVal = left.key.co[0] + offset
+                eVal = right.key.co[0] + offset
+
+                current.w1 = frame - sVal
+                current.w2 = eVal - frame
+
+                left.frame = left.key.co[0]
+                current.frame = frame
+                right.frame = right.key.co[0]
+
+                current.in_range = False
+                if frame < left.frame:
+                    left.value = prop[index]
+                elif right.frame < frame:
+                    right.value = prop[index]
+                else:
+                    current.in_range = True
+
+                if blend == 'REPLACE':
+                    current.value = prop[index]
+                else:
+                    if current.key:
+                        value = current.key.co[1]
+                    else:
+                        value = fc.evaluate(frame)
+
+                    left.value = prop[index] + (left.value - value)
+                    current.value = prop[index]  # + (value - value)
+                    right.value = prop[index] + (right.value - value)
+
+                # Using surrounding keys to convert the "additive" values to "replace"
+                    # if not current.found:
+                        # current.key = keyframe.manual(
+                            # context, src, attr,
+                            # index=index, insert_key=True
+                        # )[1]
+
+                    # left.frame = left.key.co[0]
+                    # current.frame = frame
+                    # right.frame = right.key.co[0]
+
+                    # current.value = prop[index]
+
+                    # # using additive layer, so need to find the "layered" values
+                    # base = current.key.co[1]
+                    # current.key.co[1] = left.value
+                    # utils.update(context)
+                    # left.value = prop[index]
+
+                    # current.key.co[1] = right.value
+                    # utils.update(context)
+                    # right.value = prop[index]
+
+                    # current.key.co[1] = base
+
+                    # if not current.found or (not any_quat and attr == 'rotation_quaternion'):
+                    #     fc.keyframe_points.remove(current.key)
+
+            # Add classes to memory
+                fcurves[fc] = [left, current, right]
+
+    for (action, path) in quats:
+        if len(quats[action, path]) < 4:
+            continue
+        (w_left, w_current, w_right) = quats[action, path][0]
+        (x_left, x_current, x_right) = quats[action, path][1]
+        (y_left, y_current, y_right) = quats[action, path][2]
+        (z_left, z_current, z_right) = quats[action, path][3]
+
+        left_quat = [x.value for x in (w_left, x_left, y_left, z_left)]
+        current_quat = [x.value for x in (w_current, x_current, y_current, z_current)]
+        right_quat = [x.value for x in (w_right, x_right, y_right, z_right)]
+
+        maths.normalize_qt(left_quat)
+        maths.normalize_qt(current_quat)
+        maths.normalize_qt(right_quat)
+
+        for x in (w_left, x_left, y_left, z_left):
+            x.quat = left_quat
+        for x in (w_current, x_current, y_current, z_current):
+            x.quat = current_quat
+        for x in (w_right, x_right, y_right, z_right):
+            x.quat = right_quat
+
+    # if fcurves:
+    return fcurves
+    # elif selected:
+        # return False
+
+
+class maths:
+    def add_qt_qtqt(result, quat1, quat2, t):
+        result[0] = quat1[0] + t * quat2[0]
+        result[1] = quat1[1] + t * quat2[1]
+        result[2] = quat1[2] + t * quat2[2]
+        result[3] = quat1[3] + t * quat2[3]
+
+    def copy_qt_qt(q1, q2):
+        q1[0] = q2[0]
+        q1[1] = q2[1]
+        q1[2] = q2[2]
+        q1[3] = q2[3]
+
+    def dot_qtqt(q1, q2):
+        return q1[0] * q2[0] + q1[1] * q2[1] + q1[2] * q2[2] + q1[3] * q2[3]
+
+    def interp_dot_slerp(t, cosom, r_w):
+        """
+        * Generic function for implementing slerp
+        * (quaternions and spherical vector coords).
+        *
+        * param t: factor in [0..1]
+        * param cosom: dot product from normalized vectors/quats.
+        * param r_w: calculated weights.
+        """
+        from math import sin, acos
+        eps = 1e-4
+
+        # BLI_assert(IN_RANGE_INCL(cosom, -1.0001, 1.0001))
+
+        # /* within [-1..1] range, avoid aligned axis */
+        if (abs(cosom) < (1.0 - eps)):
+            omega = acos(cosom)
+            sinom = sin(omega)
+            r_w[0] = sin((1.0 - t) * omega) / sinom
+            r_w[1] = sin(t * omega) / sinom
+        else:
+            # /* fallback to lerp */
+            r_w[0] = 1.0 - t
+            r_w[1] = t
+
+    def interp_qt_qtqt(result, quat1, quat2, t):
+        quat = [0, 0, 0, 0]
+        w = [0, 0]
+
+        cosom = maths.dot_qtqt(quat1, quat2)
+
+        # /* rotate around shortest angle */
+        if (cosom < 0.0):
+            cosom = -cosom
+            maths.negate_v4_v4(quat, quat1)
+        else:
+            maths.copy_qt_qt(quat, quat1)
+
+        maths.interp_dot_slerp(t, cosom, w)
+
+        result[0] = w[0] * quat[0] + w[1] * quat2[0]
+        result[1] = w[0] * quat[1] + w[1] * quat2[1]
+        result[2] = w[0] * quat[2] + w[1] * quat2[2]
+        result[3] = w[0] * quat[3] + w[1] * quat2[3]
+
+    def mul_qt_fl(q, f):
+        q[0] *= f
+        q[1] *= f
+        q[2] *= f
+        q[3] *= f
+
+    def mul_qt_qtqt(q, q1, q2):
+        t0 = [0, 0, 0, 0]
+        t1 = [0, 0, 0, 0]
+        t2 = [0, 0, 0, 0]
+
+        t0 = q1[0] * q2[0] - q1[1] * q2[1] - q1[2] * q2[2] - q1[3] * q2[3]
+        t1 = q1[0] * q2[1] + q1[1] * q2[0] + q1[2] * q2[3] - q1[3] * q2[2]
+        t2 = q1[0] * q2[2] + q1[2] * q2[0] + q1[3] * q2[1] - q1[1] * q2[3]
+        q[3] = q1[0] * q2[3] + q1[3] * q2[0] + q1[1] * q2[2] - q1[2] * q2[1]
+        q[0] = t0
+        q[1] = t1
+        q[2] = t2
+
+    def negate_v4_v4(r, a):
+        r[0] = -a[0]
+        r[1] = -a[1]
+        r[2] = -a[2]
+        r[3] = -a[3]
+
+    def normalize_qt(q):
+        from math import sqrt
+
+        qlen = sqrt(maths.dot_qtqt(q, q))
+
+        if (qlen != 0.0):
+            maths.mul_qt_fl(q, 1.0 / qlen)
+        else:
+            q[1] = 1.0
+            q[0] = q[2] = q[3] = 0.0
+
+        return qlen
+
+    def normalize_qt_qt(r, q):
+        maths.copy_qt_qt(r, q)
+        return maths.normalize_qt(r)
+
+    def sub_qt_qtqt(q, q1, q2):
+        nq2 = [0, 0, 0, 0]
+
+        nq2[0] = -q2[0]
+        nq2[1] = q2[1]
+        nq2[2] = q2[2]
+        nq2[3] = q2[3]
+
+        maths.mul_qt_qtqt(q, q1, nq2)
+
+
+def register():
+    for name in ('Object Mode', 'Pose'):
+        args = dict(name=name, type='E')
+        km.add(TWEEN_OT_breakdown, **args, value='PRESS', shift=True)
+        km.add(TWEEN_OT_relax, **args, value='PRESS', alt=True)
+        km.add(TWEEN_OT_push, **args, value='PRESS', ctrl=True)
+
+
+def unregister():
+    km.remove()
