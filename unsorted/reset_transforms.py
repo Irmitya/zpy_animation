@@ -71,8 +71,13 @@ class RESET_OT_base_transforms(Operator):
                     src.rotation_axis_angle = base.rotation_axis_angle
                 else:
                     src.rotation_euler = base.rotation_euler
+                if Is.posebone(src):
+                    src.bbone_curveinx = src.bbone_curveoutx = src.bbone_curveiny = src.bbone_curveouty = src.bbone_rollin = src.bbone_rollout = 0
             if 'scale' in self.mode:
                 src.scale = base.scale
+                if Is.posebone(src):
+                    src.bbone_scaleinx = src.bbone_scaleinx = src.bbone_scaleiny = src.bbone_scaleoutx = src.bbone_scaleouty = 1
+                    src.bbone_easein = src.bbone_easeout = 0
 
             utils.clean_custom(src)
 
