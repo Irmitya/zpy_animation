@@ -23,7 +23,7 @@ class GRAPH_OT_select_by(Operator):
 
     @classmethod
     def description(cls, context, properties):
-        return cls.bl_rna.description
+        return cls.bl_description
 
     # @classmethod
     # def poll(cls, context):
@@ -51,7 +51,7 @@ class GRAPH_OT_select_by_type(Operator):
 
     @classmethod
     def description(cls, context, properties):
-        return cls.bl_rna.description
+        return cls.bl_description
 
     @classmethod
     def poll(cls, context):
@@ -110,7 +110,7 @@ class GRAPH_OT_select_peaks(Operator):
 
     @classmethod
     def description(cls, context, properties):
-        return cls.bl_rna.description
+        return cls.bl_description
 
     @classmethod
     def poll(cls, context):
@@ -165,7 +165,7 @@ class GRAPH_OT_select_between(Operator):
 
     @classmethod
     def description(cls, context, properties):
-        return cls.bl_rna.description
+        return cls.bl_description
 
     @classmethod
     def poll(cls, context):
@@ -220,7 +220,7 @@ class GRAPH_OT_select_random(Operator):
 
     @classmethod
     def description(cls, context, properties):
-        return cls.bl_rna.description
+        return cls.bl_description
 
     @classmethod
     def poll(cls, context):

@@ -10,7 +10,7 @@ class GRAPH_OT_snap(Operator):
 
     @classmethod
     def description(cls, context, properties):
-        return cls.bl_rna.description
+        return cls.bl_description
 
     @classmethod
     def poll(cls, context):

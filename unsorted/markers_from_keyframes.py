@@ -10,7 +10,7 @@ class MARKER_OT_from_selected_keyframes(bpy.types.Operator):
 
     @classmethod
     def description(cls, context, properties):
-        return cls.bl_rna.description
+        return cls.bl_description
 
     def execute(self, context):
         utils.update_keyframe_points(context)

@@ -9,7 +9,7 @@ class CHANNELS_OT_send_to_group(bpy.types.Operator):
 
     @classmethod
     def description(cls, context, properties):
-        return cls.bl_rna.description
+        return cls.bl_description
 
     @classmethod
     def poll(cls, context):

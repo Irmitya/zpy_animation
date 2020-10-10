@@ -46,7 +46,7 @@ class RESET_OT_base_transforms(Operator):
 
     @classmethod
     def description(cls, context, properties):
-        return cls.bl_rna.description
+        return cls.bl_description
 
     @classmethod
     def poll(cls, context):
@@ -96,7 +96,7 @@ class RESET_OT_all_transforms(Operator):
 
     @classmethod
     def description(cls, context, properties):
-        return cls.bl_rna.description
+        return cls.bl_description
 
     @classmethod
     def poll(cls, context):
@@ -114,7 +114,7 @@ class ZERO_OT_layered_pose(Operator):
 
     @classmethod
     def description(cls, context, properties):
-        return cls.bl_rna.description
+        return cls.bl_description
 
     @classmethod
     def poll(cls, context):
