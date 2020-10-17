@@ -59,7 +59,9 @@ class RESET_OT_base_transforms(Operator):
     def execute(self, context):
         do_all = (self.mode == {'loc', 'rot', 'scale'})
 
-        for src in Get.selected(context):
+        selected = Get.selected(context, mirror=True)
+
+        for src in selected:
             base = get_base(src)
 
             if 'loc' in self.mode:
@@ -81,7 +83,7 @@ class RESET_OT_base_transforms(Operator):
 
             utils.clean_custom(src)
 
-        keyframe.keyingset(context, selected=Get.selected(context))
+        keyframe.keyingset(context, selected=selected)
 
         return {'FINISHED'}
 
@@ -131,12 +133,13 @@ class ZERO_OT_layered_pose(Operator):
 
     def invoke(self, context, event):
         # Get current pose
-        for src in Get.selected(context):
+        selected = Get.selected(context, mirror=True)
+        for src in selected:
             pose.base[repr(src)] = Get.matrix(src, basis=True)
 
         # Disable animation and get pose from lower layers
         base_anim = dict()
-        for src in Get.selected(context):
+        for src in selected:
             obj = src.id_data
             anim = obj.animation_data
 
@@ -202,7 +205,8 @@ class ZERO_OT_layered_pose(Operator):
     def execute(self, context):
         fac = (self.factor / 100)
 
-        for src in Get.selected(context):
+        selected = Get.selected(context, mirror=True)
+        for src in selected:
             base = pose.base[repr(src)]
             reset = pose.reset[repr(src)]
 
@@ -239,7 +243,7 @@ class ZERO_OT_layered_pose(Operator):
             if 'scale' in self.mode:
                 src.scale = matrix.scale
 
-        keyframe.keyingset(context, selected=Get.selected(context))
+        keyframe.keyingset(context, selected=selected)
 
         return {'FINISHED'}
 
